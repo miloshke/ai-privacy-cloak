@@ -1,0 +1,85 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      matrix:
+        include:
+          - goos: darwin
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+
+      - name: Build
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          CGO_ENABLED: 0
+        run: |
+          set -e
+          ext=""
+          if [ "${{ matrix.goos }}" = "windows" ]; then ext=".exe"; fi
+          mkdir -p dist
+          go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+            -o "dist/cloak${ext}" ./cmd/cloak
+          # cloak-tray's non-macOS systray backends are pure Go, but its
+          # macOS backend needs cgo - skip it there under CGO_ENABLED=0
+          # rather than ship a broken tray binary; the CLI is the part
+          # that matters for a release.
+          if [ "${{ matrix.goos }}" != "darwin" ]; then
+            go build -ldflags "-s -w -X main.version=${GITHUB_REF_NAME}" \
+              -o "dist/cloak-tray${ext}" ./cmd/cloak-tray
+          fi
+          cd dist
+          archive="cloak_${GITHUB_REF_NAME}_${{ matrix.goos }}_${{ matrix.goarch }}"
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            zip "../${archive}.zip" ./*
+          else
+            tar czf "../${archive}.tar.gz" ./*
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cloak_${{ matrix.goos }}_${{ matrix.goarch }}
+          path: |
+            cloak_*.tar.gz
+            cloak_*.zip
+          if-no-files-found: error
+
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" artifacts/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --generate-notes

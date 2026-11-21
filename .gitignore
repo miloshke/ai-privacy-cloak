@@ -1,0 +1,9 @@
+/bin/
+/dist/
+/cloak
+/cloak-tray
+*.test
+.DS_Store
+.idea/
+.claude
+website
